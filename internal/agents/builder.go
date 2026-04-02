@@ -83,6 +83,7 @@ func (b *BuilderAgent) buildTask(ctx context.Context, sharedCtx *sharedctx.Share
 
 	for path, content := range files {
 		sharedCtx.SetFile(path, content)
+		sharedCtx.Publish(sharedctx.Event{Type: "file_created", File: path, Message: fmt.Sprintf("Created %s", path)})
 	}
 
 	return nil

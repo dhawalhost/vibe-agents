@@ -67,6 +67,7 @@ func (b *BaseAgent) PromptBuilder() *prompt.Builder {
 func (b *BaseAgent) LogThoughts(sharedCtx *sharedctx.SharedContext, thoughts []string) {
 	for i, thought := range thoughts {
 		sharedCtx.AddThought(b.agentType, i+1, thought, "")
+		sharedCtx.Publish(sharedctx.Event{Type: "thought", Agent: string(b.agentType), Message: thought})
 	}
 }
 

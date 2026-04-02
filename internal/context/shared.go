@@ -9,6 +9,15 @@ import (
 	"github.com/dhawalhost/vibe-agents/pkg/types"
 )
 
+// Event represents a pipeline event that can be streamed to the UI.
+type Event struct {
+	Type    string `json:"type"`
+	Agent   string `json:"agent,omitempty"`
+	Message string `json:"message,omitempty"`
+	File    string `json:"file,omitempty"`
+	Payload any    `json:"payload,omitempty"`
+}
+
 // SharedContext is the central state shared across all agents
 type SharedContext struct {
 	mu sync.RWMutex
@@ -28,6 +37,10 @@ type SharedContext struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	ProjectName string    `json:"project_name,omitempty"`
 	OutputDir   string    `json:"output_dir,omitempty"`
+
+	// EventBus is an optional channel for streaming pipeline events to the UI.
+	// It is not serialised; it is only used during a live run.
+	EventBus chan<- Event `json:"-"`
 }
 
 // New creates a new SharedContext with default values
@@ -227,4 +240,19 @@ func (c *SharedContext) GetPendingTasks() []*types.Task {
 		}
 	}
 	return pending
+}
+
+// Publish sends an event to the EventBus if one is registered.
+// It is non-blocking: if the channel is full the event is dropped.
+func (c *SharedContext) Publish(evt Event) {
+	c.mu.RLock()
+	bus := c.EventBus
+	c.mu.RUnlock()
+	if bus == nil {
+		return
+	}
+	select {
+	case bus <- evt:
+	default:
+	}
 }

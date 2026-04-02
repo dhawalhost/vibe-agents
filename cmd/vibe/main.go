@@ -14,6 +14,7 @@ import (
 	vibecontext "github.com/dhawalhost/vibe-agents/internal/context"
 	"github.com/dhawalhost/vibe-agents/internal/llm"
 	"github.com/dhawalhost/vibe-agents/internal/output"
+	"github.com/dhawalhost/vibe-agents/internal/server"
 )
 
 var (
@@ -23,6 +24,8 @@ var (
 	model     string
 	provider  string
 	stream    bool
+	servePort int
+	noOpen    bool
 )
 
 func main() {
@@ -107,7 +110,21 @@ Set GITHUB_TOKEN environment variable to authenticate.`,
 
 	configCmd.AddCommand(configSetCmd, configGetCmd)
 
-	rootCmd.AddCommand(generateCmd, iterateCmd, explainCmd, configCmd)
+	// serve command
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Launch the Vibe Agents web UI",
+		Long: `Start an HTTP server that provides a browser-based UI for running the
+agent pipeline, viewing generated files, reviewing code, and iterating.`,
+		Example: `  vibe serve
+  vibe serve --port 3000
+  vibe serve --no-open`,
+		RunE: runServe,
+	}
+	serveCmd.Flags().IntVar(&servePort, "port", 8080, "port to listen on")
+	serveCmd.Flags().BoolVar(&noOpen, "no-open", false, "do not automatically open the browser")
+
+	rootCmd.AddCommand(generateCmd, iterateCmd, explainCmd, configCmd, serveCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -372,4 +389,41 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Config key: %s\n", args[0])
 	fmt.Println("(Use 'vibe config set' to modify values)")
 	return nil
+}
+
+func runServe(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	providerName := cfg.Provider
+	if provider != "" {
+		providerName = provider
+	}
+	modelName := cfg.Model
+	if model != "" {
+		modelName = model
+	}
+
+	srv := server.New(server.Options{
+		Port:            servePort,
+		NoOpen:          noOpen,
+		DefaultProvider: providerName,
+		DefaultModel:    modelName,
+		Config:          cfg,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\n⚠️  Shutting down server…")
+		cancel()
+	}()
+
+	return srv.Run(ctx)
 }

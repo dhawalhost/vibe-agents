@@ -58,6 +58,13 @@ func (r *ReviewerAgent) Act(ctx context.Context, sharedCtx *sharedctx.SharedCont
 
 	for _, note := range notes {
 		sharedCtx.AddReviewNote(note)
+		sharedCtx.Publish(sharedctx.Event{
+			Type:    "review_note",
+			Agent:   string(types.AgentReviewer),
+			File:    note.File,
+			Message: fmt.Sprintf("[%s] %s: %s", note.Severity, note.Category, note.Message),
+			Payload: note,
+		})
 	}
 
 	// Print summary
