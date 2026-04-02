@@ -1,0 +1,41 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output coverage files
+coverage.out
+coverage.html
+
+# Go module cache
+vendor/
+
+# Generated output directory (user projects)
+output/
+
+# Build cache
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config with secrets
+.env
+*.env
+config.local.yaml
+
+# Vibe agent session data
+.vibe/

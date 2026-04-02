@@ -1,0 +1,30 @@
+provider: copilot
+model: gpt-4o
+
+agents:
+  architect:
+    model: gpt-4o
+    reasoning: cot
+  planner:
+    model: gpt-4o
+    reasoning: cot
+  builder:
+    model: gpt-4o
+    reasoning: cot
+  reviewer:
+    model: gpt-4o
+    reasoning: tot
+  tester:
+    model: gpt-4o
+    reasoning: cot
+  iterator:
+    model: gpt-4o
+    reasoning: react
+
+output:
+  directory: ./output
+  overwrite: false
+
+logging:
+  level: info
+  chain_of_thought: true

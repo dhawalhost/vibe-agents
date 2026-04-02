@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vibe Agents</title>
+  <link rel="stylesheet" href="/style.css" />
+  <!-- Prism.js for syntax highlighting (loaded from CDN) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css"
+        integrity="sha512-vswe+cgvic/XBoF1OcM/TeJ2FW0OofqAVdCZiEYkd6dwGXthvkSFWOoGGJgS2CW70VK5dQM5Oh+7ne47s74YQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ─────────────────────────────────────── -->
+  <header>
+    <span style="font-size:22px">🤖</span>
+    <h1>Vibe Agents</h1>
+    <span class="version">v1.0.0</span>
+  </header>
+
+  <div class="main-content">
+
+    <!-- ══════════════════════════════════════════════ -->
+    <!-- Screen 1 — Prompt                             -->
+    <!-- ══════════════════════════════════════════════ -->
+    <section id="screen-prompt" class="screen">
+      <div class="prompt-card">
+        <h2>✨ Build something amazing</h2>
+        <p class="subtitle">Describe the system you want, and the agent pipeline will design, code, review and test it.</p>
+
+        <form id="generate-form">
+          <div class="form-group">
+            <label for="prompt-input">What do you want to build?</label>
+            <textarea
+              id="prompt-input"
+              placeholder='e.g. "Build a REST API with user auth and PostgreSQL" or "React dashboard with real-time charts"'
+              required
+            ></textarea>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="provider-select">LLM Provider</label>
+              <select id="provider-select">
+                <option value="copilot">GitHub Copilot</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="ollama">Ollama (local)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="model-input">Model</label>
+              <input id="model-input" type="text" placeholder="gpt-4o" value="gpt-4o" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="output-dir">Output Directory</label>
+            <input id="output-dir" type="text" placeholder="./output" value="./output" />
+          </div>
+
+          <button type="submit" class="btn btn-primary" id="generate-btn" style="width:100%;justify-content:center;margin-top:8px">
+            ✨ Generate
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════ -->
+    <!-- Screen 2 — Pipeline (live view)               -->
+    <!-- ══════════════════════════════════════════════ -->
+    <section id="screen-pipeline" class="screen">
+
+      <!-- Left sidebar: agent statuses -->
+      <aside class="pipeline-sidebar">
+        <h3>Pipeline</h3>
+        <p id="pipeline-prompt-label" style="padding:10px 16px;font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border)"></p>
+        <div class="agent-list" id="agent-list"></div>
+        <div class="pipeline-stats">
+          <div class="stat-item">
+            <span>Files generated</span>
+            <span class="stat-value" id="stat-files">0</span>
+          </div>
+          <div class="stat-item">
+            <span>Thoughts logged</span>
+            <span class="stat-value" id="stat-thoughts">0</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right: live log -->
+      <div class="pipeline-log-area">
+        <div class="log-header">
+          <h3>Live Output</h3>
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('log-output').innerHTML=''">Clear</button>
+        </div>
+        <div id="log-output"></div>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════ -->
+    <!-- Screen 3 — Results                            -->
+    <!-- ══════════════════════════════════════════════ -->
+    <section id="screen-results" class="screen">
+
+      <!-- Left: file tree -->
+      <aside class="results-files">
+        <h3>Generated Files</h3>
+        <div class="file-tree" id="file-tree">
+          <div class="empty-state"><span class="icon">📂</span>No files yet</div>
+        </div>
+      </aside>
+
+      <!-- Center: code viewer + iteration bar -->
+      <div class="results-viewer">
+        <div class="viewer-topbar">
+          <span class="viewer-path" id="viewer-path">Select a file</span>
+          <button class="btn btn-secondary btn-sm" onclick="showScreen('prompt')">← New project</button>
+        </div>
+        <div id="code-viewer">
+          <div class="empty-state"><span class="icon">📝</span>Select a file from the tree</div>
+          <pre style="display:none"><code id="code-content"></code></pre>
+        </div>
+
+        <!-- Iteration bar -->
+        <div class="iteration-bar">
+          <input
+            id="iterate-input"
+            type="text"
+            placeholder="What would you like to change? (e.g. Add dark mode, switch DB to MongoDB…)"
+          />
+          <button class="btn btn-primary" id="iterate-btn">🔄 Iterate</button>
+        </div>
+      </div>
+
+      <!-- Right: review notes + chain-of-thought -->
+      <div class="results-right">
+        <div class="results-review">
+          <h3>Review Notes</h3>
+          <div class="review-list" id="review-list">
+            <div class="empty-state" style="padding:16px;font-size:12px">Run generate to see review notes</div>
+          </div>
+        </div>
+
+        <div class="results-cot">
+          <h3>Chain of Thought</h3>
+          <div class="cot-list" id="cot-list"></div>
+        </div>
+      </div>
+
+    </section>
+
+  </div><!-- .main-content -->
+
+</div><!-- #app -->
+
+<div id="toast-container"></div>
+
+<!-- Prism.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"
+        integrity="sha512-7Z9J3l1+EYfeaPKcGXu88yqjxo9iQZns33ewcoA0xHFwDEdxUELBpKCAAknFGMBfFnB4qdEYb4BDAvR4jhICA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"
+        integrity="sha512-SkmBfuA2hqjzEVpmnMt/LINrjop3GKWqsuLSSB3e7iBmYK7JuWw4ldmmxwD9mdm2IRTTi0OxSAfEGvgEi0i2Kw=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<!-- App logic -->
+<script src="/app.js"></script>
+
+<script>
+  // Show/hide the pre element when a file is selected vs empty state
+  const viewer = document.getElementById('code-viewer');
+  const origLoad = window.loadFileContent;
+  window.loadFileContent = async function(jobID, path) {
+    viewer.querySelector('.empty-state') && (viewer.querySelector('.empty-state').style.display = 'none');
+    viewer.querySelector('pre').style.display = 'block';
+    await origLoad(jobID, path);
+  };
+</script>
+</body>
+</html>
