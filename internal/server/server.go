@@ -203,7 +203,7 @@ func (srv *Server) buildPipeline(providerName, modelName string) (*agents.Orches
 	default:
 		copilotProv, err := buildCopilotProvider()
 		if err != nil {
-			return nil, fmt.Errorf("unknown provider %q and no valid Copilot credentials set", providerName)
+			return nil, fmt.Errorf("unknown provider %q and no valid Copilot credentials set: %w", providerName, err)
 		}
 		router.Register("copilot", copilotProv)
 		providerName = "copilot"
