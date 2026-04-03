@@ -19,15 +19,23 @@ const (
 
 // CopilotProvider implements LLMProvider for GitHub Copilot
 type CopilotProvider struct {
-	token      string
-	httpClient *http.Client
-	models     []string
+	tokenSource TokenSource
+	httpClient  *http.Client
+	models      []string
 }
 
-// NewCopilotProvider creates a new GitHub Copilot provider
+// NewCopilotProvider creates a new GitHub Copilot provider using a static token
+// (e.g. a GITHUB_TOKEN OAuth token obtained via `gh auth token`).
 func NewCopilotProvider(token string) *CopilotProvider {
+	return NewCopilotProviderWithTokenSource(NewStaticTokenSource(token))
+}
+
+// NewCopilotProviderWithTokenSource creates a new GitHub Copilot provider that
+// obtains its bearer token from the given TokenSource.  Use this with
+// GitHubAppTokenSource to authenticate via a GitHub App installation.
+func NewCopilotProviderWithTokenSource(ts TokenSource) *CopilotProvider {
 	return &CopilotProvider{
-		token: token,
+		tokenSource: ts,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -130,7 +138,9 @@ func (p *CopilotProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	if err := p.setHeaders(httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -191,7 +201,9 @@ func (p *CopilotProvider) GenerateStream(ctx context.Context, req LLMRequest) (<
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	if err := p.setHeaders(httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -252,11 +264,16 @@ func (p *CopilotProvider) GenerateStream(ctx context.Context, req LLMRequest) (<
 	return ch, nil
 }
 
-func (p *CopilotProvider) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+p.token)
+func (p *CopilotProvider) setHeaders(req *http.Request) error {
+	token, err := p.tokenSource.Token()
+	if err != nil {
+		return fmt.Errorf("get Copilot token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Copilot-Integration-Id", "vibe-agents")
 	req.Header.Set("Editor-Version", "vibe-agents/1.0.0")
 	req.Header.Set("User-Agent", "vibe-agents/1.0.0")
+	return nil
 }

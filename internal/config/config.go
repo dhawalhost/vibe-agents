@@ -115,6 +115,44 @@ func GetGitHubToken() string {
 	return os.Getenv("GITHUB_TOKEN")
 }
 
+// GetGitHubAppID returns the GitHub App ID from environment (GITHUB_APP_ID).
+func GetGitHubAppID() string {
+	return os.Getenv("GITHUB_APP_ID")
+}
+
+// GetGitHubAppInstallationID returns the GitHub App Installation ID from
+// environment (GITHUB_APP_INSTALLATION_ID).
+func GetGitHubAppInstallationID() string {
+	return os.Getenv("GITHUB_APP_INSTALLATION_ID")
+}
+
+// GetGitHubAppPrivateKey returns the PEM-encoded RSA private key for the
+// GitHub App.  It checks two environment variables in order:
+//
+//  1. GITHUB_APP_PRIVATE_KEY — the PEM content directly.  Literal "\n"
+//     sequences are treated as newlines so the value fits in a single-line
+//     env var.
+//  2. GITHUB_APP_PRIVATE_KEY_PATH — path to a PEM file on disk.
+//
+// Returns an empty string when neither variable is set.  If
+// GITHUB_APP_PRIVATE_KEY_PATH is set but the file cannot be read, the error
+// is printed to stderr and an empty string is returned so the caller can
+// produce a clearer diagnostic.
+func GetGitHubAppPrivateKey() string {
+	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
+		return v
+	}
+	if path := os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read GITHUB_APP_PRIVATE_KEY_PATH %q: %v\n", path, err)
+			return ""
+		}
+		return string(data)
+	}
+	return ""
+}
+
 // GetOpenAIKey returns the OpenAI API key from environment
 func GetOpenAIKey() string {
 	return os.Getenv("OPENAI_API_KEY")
