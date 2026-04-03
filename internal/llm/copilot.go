@@ -14,6 +14,12 @@ import (
 const (
 	CopilotBaseURL    = "https://api.githubcopilot.com"
 	CopilotAPIVersion = "2023-07-07"
+
+	// copilotProviderConfigError is the error message surfaced when neither
+	// GitHub App credentials nor a static token are configured.
+	copilotProviderConfigError = "Copilot provider requires either:\n" +
+		"  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH)\n" +
+		"  • GITHUB_TOKEN (OAuth token from `gh auth token`)"
 )
 
 // copilotTransport is an http.RoundTripper that injects the Copilot-specific
@@ -45,10 +51,6 @@ func (t *copilotTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 //
 // This is the canonical credential-resolution helper; both the CLI and the HTTP
 // server call it so that auth behaviour stays in sync.
-const copilotProviderConfigError = "Copilot provider requires either:\n" +
-	"  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH)\n" +
-	"  • GITHUB_TOKEN (OAuth token from `gh auth token`)"
-
 func BuildCopilotProvider(appID, privateKeyPEM, installationID, token string) (*CopilotProvider, error) {
 	if appID != "" && privateKeyPEM != "" {
 		// installationID is optional: if empty it will be auto-discovered.
@@ -66,7 +68,7 @@ func BuildCopilotProvider(appID, privateKeyPEM, installationID, token string) (*
 	return nil, fmt.Errorf(copilotProviderConfigError)
 }
 
-
+// CopilotProvider implements LLMProvider for GitHub Copilot.
 // It uses the go-openai SDK pointed at the Copilot API endpoint, with a custom
 // transport that supplies the dynamic bearer token and Copilot-specific headers.
 type CopilotProvider struct {
