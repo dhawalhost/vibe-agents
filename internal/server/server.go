@@ -154,11 +154,14 @@ func (srv *Server) buildPipeline(providerName, modelName string) (*agents.Orches
 
 	switch providerName {
 	case "copilot":
-		token := config.GetGitHubToken()
-		if token == "" {
-			return nil, fmt.Errorf("GITHUB_TOKEN not set")
+		copilotProv, err := llm.BuildCopilotProvider(
+			config.GetGitHubAppID(), config.GetGitHubAppPrivateKey(),
+			config.GetGitHubAppInstallationID(), config.GetGitHubToken(),
+		)
+		if err != nil {
+			return nil, err
 		}
-		router.Register("copilot", llm.NewCopilotProvider(token))
+		router.Register("copilot", copilotProv)
 	case "openai":
 		key := config.GetOpenAIKey()
 		if key == "" {
@@ -174,11 +177,14 @@ func (srv *Server) buildPipeline(providerName, modelName string) (*agents.Orches
 	case "ollama":
 		router.Register("ollama", llm.NewOllamaProvider("http://localhost:11434"))
 	default:
-		token := config.GetGitHubToken()
-		if token == "" {
-			return nil, fmt.Errorf("unknown provider %q and no GITHUB_TOKEN set", providerName)
+		copilotProv, err := llm.BuildCopilotProvider(
+			config.GetGitHubAppID(), config.GetGitHubAppPrivateKey(),
+			config.GetGitHubAppInstallationID(), config.GetGitHubToken(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("unknown provider %q and no valid Copilot credentials set: %w", providerName, err)
 		}
-		router.Register("copilot", llm.NewCopilotProvider(token))
+		router.Register("copilot", copilotProv)
 		providerName = "copilot"
 	}
 

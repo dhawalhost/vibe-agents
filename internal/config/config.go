@@ -115,6 +115,56 @@ func GetGitHubToken() string {
 	return os.Getenv("GITHUB_TOKEN")
 }
 
+// GetGitHubAppID returns the GitHub App ID from environment (GITHUB_APP_ID).
+func GetGitHubAppID() string {
+	return os.Getenv("GITHUB_APP_ID")
+}
+
+// GetGitHubAppInstallationID returns the GitHub App Installation ID from
+// environment (GITHUB_APP_INSTALLATION_ID).
+// This is optional: when empty the installation ID is discovered automatically
+// via the GitHub API. Set it explicitly only when the App is installed on
+// multiple accounts or organisations and you need to choose a specific one.
+func GetGitHubAppInstallationID() string {
+	return os.Getenv("GITHUB_APP_INSTALLATION_ID")
+}
+
+// GetGitHubAppPrivateKey returns the PEM-encoded RSA private key for the
+// GitHub App.  It checks two environment variables in order:
+//
+//  1. GITHUB_APP_PRIVATE_KEY — the PEM content directly.  Literal "\n"
+//     sequences are treated as newlines so the value fits in a single-line
+//     env var.
+//  2. GITHUB_APP_PRIVATE_KEY_PATH — path to a PEM file on disk.
+//
+// Returns an empty string and nil error when neither variable is set. If
+// GITHUB_APP_PRIVATE_KEY_PATH is set but the file cannot be read, the error
+// is returned so callers can surface a clear diagnostic.
+func GetGitHubAppPrivateKeyWithError() (string, error) {
+	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
+		return v, nil
+	}
+	if path := os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read GITHUB_APP_PRIVATE_KEY_PATH %q: %w", path, err)
+		}
+		return string(data), nil
+	}
+	return "", nil
+}
+
+// GetGitHubAppPrivateKey returns the GitHub App private key from environment.
+// Prefer GetGitHubAppPrivateKeyWithError when callers need deterministic
+// diagnostics for unreadable GITHUB_APP_PRIVATE_KEY_PATH values.
+func GetGitHubAppPrivateKey() string {
+	key, err := GetGitHubAppPrivateKeyWithError()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return ""
+	}
+	return key
+}
 // GetOpenAIKey returns the OpenAI API key from environment
 func GetOpenAIKey() string {
 	return os.Getenv("OPENAI_API_KEY")

@@ -71,8 +71,17 @@ make install
 Set your provider credentials as environment variables:
 
 ```bash
-# GitHub Copilot (default)
-export GITHUB_TOKEN=your_github_token
+# GitHub Copilot — Option A: GitHub App installation token (recommended)
+export GITHUB_APP_ID=123456
+# PEM content directly (use literal \n between lines):
+export GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMII...\n-----END RSA PRIVATE KEY-----"
+# — or — point to a PEM file on disk:
+export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+# Optional: only needed when the App is installed on multiple accounts/orgs
+# export GITHUB_APP_INSTALLATION_ID=78901234
+
+# GitHub Copilot — Option B: OAuth token (e.g. from `gh auth token`)
+export GITHUB_TOKEN=$(gh auth token)
 
 # OpenAI
 export OPENAI_API_KEY=your_openai_key
@@ -80,6 +89,18 @@ export OPENAI_API_KEY=your_openai_key
 # Anthropic
 export ANTHROPIC_API_KEY=your_anthropic_key
 ```
+
+#### Setting up a GitHub App for Copilot
+
+1. Go to **Settings → Developer settings → GitHub Apps** and click **New GitHub App**.
+2. Give it a name, set the homepage URL, and under **Permissions** enable **Copilot Editor** (or the equivalent Copilot access scope).
+3. Generate and download a **private key** (PEM file) from the App's settings page.
+4. Install the App on your account or organisation.
+5. Set `GITHUB_APP_ID` and either `GITHUB_APP_PRIVATE_KEY` / `GITHUB_APP_PRIVATE_KEY_PATH` as shown above.
+   - When the App is installed on **exactly one** account or org, the Installation ID is discovered automatically — no extra env var needed.
+   - When the App is installed on **multiple** accounts or orgs, set `GITHUB_APP_INSTALLATION_ID` to select the right one (you can find the ID in the URL: `github.com/settings/installations/<ID>`).
+
+> **Why not a Personal Access Token?**  The `api.githubcopilot.com` endpoint only accepts OAuth-style tokens.  GitHub App installation tokens and `gh auth token` OAuth tokens both work; classic PATs and fine-grained PATs are rejected.
 
 ### Generate a System
 
@@ -131,7 +152,7 @@ export ANTHROPIC_API_KEY=your_anthropic_key
 
 | Provider | Models | Auth |
 |----------|--------|------|
-| **GitHub Copilot** (default) | gpt-4o, gpt-4o-mini, claude-sonnet-4, o1-preview | `GITHUB_TOKEN` |
+| **GitHub Copilot** (default) | gpt-4o, gpt-4o-mini, claude-sonnet-4, o1-preview | `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` + optional `GITHUB_APP_INSTALLATION_ID` (only needed when installed on multiple accounts/orgs) **or** `GITHUB_TOKEN` |
 | **OpenAI** | gpt-4o, gpt-4o-mini, gpt-4-turbo | `OPENAI_API_KEY` |
 | **Anthropic** | claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
 | **Ollama** (local) | llama3, mistral, codellama | None (local) |

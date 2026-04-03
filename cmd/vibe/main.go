@@ -132,6 +132,15 @@ agent pipeline, viewing generated files, reviewing code, and iterating.`,
 	}
 }
 
+// buildCopilotProvider creates a CopilotProvider using either GitHub App
+// installation credentials (preferred) or a static GITHUB_TOKEN.
+func buildCopilotProvider() (*llm.CopilotProvider, error) {
+	return llm.BuildCopilotProvider(
+		config.GetGitHubAppID(), config.GetGitHubAppPrivateKey(),
+		config.GetGitHubAppInstallationID(), config.GetGitHubToken(),
+	)
+}
+
 func buildPipeline(cfg *config.Config) (*agents.OrchestratorAgent, error) {
 	// Determine provider
 	providerName := cfg.Provider
@@ -151,11 +160,11 @@ func buildPipeline(cfg *config.Config) (*agents.OrchestratorAgent, error) {
 	// Register providers
 	switch providerName {
 	case "copilot":
-		token := config.GetGitHubToken()
-		if token == "" {
-			return nil, fmt.Errorf("GITHUB_TOKEN environment variable not set (required for Copilot provider)")
+		copilotProv, err := buildCopilotProvider()
+		if err != nil {
+			return nil, err
 		}
-		router.Register("copilot", llm.NewCopilotProvider(token))
+		router.Register("copilot", copilotProv)
 	case "openai":
 		apiKey := config.GetOpenAIKey()
 		if apiKey == "" {
@@ -172,13 +181,12 @@ func buildPipeline(cfg *config.Config) (*agents.OrchestratorAgent, error) {
 		router.Register("ollama", llm.NewOllamaProvider("http://localhost:11434"))
 	default:
 		// Try copilot as fallback
-		token := config.GetGitHubToken()
-		if token != "" {
-			router.Register("copilot", llm.NewCopilotProvider(token))
-			providerName = "copilot"
-		} else {
-			return nil, fmt.Errorf("unknown provider %q and no GITHUB_TOKEN set", providerName)
+		copilotProv, err := buildCopilotProvider()
+		if err != nil {
+			return nil, fmt.Errorf("unknown provider %q and no valid Copilot credentials set: %w", providerName, err)
 		}
+		router.Register("copilot", copilotProv)
+		providerName = "copilot"
 	}
 
 	// Get the primary provider for agents
