@@ -30,7 +30,7 @@ type copilotTransport struct {
 }
 
 func (t *copilotTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	token, err := t.tokenSource.Token()
+	token, err := t.tokenSource.Token(req.Context())
 	if err != nil {
 		return nil, fmt.Errorf("get Copilot token: %w", err)
 	}

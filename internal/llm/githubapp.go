@@ -14,18 +14,16 @@ import (
 )
 
 const (
-	// tokenTimeout is the context deadline used when fetching/refreshing
-	// installation access tokens to avoid unbounded hangs.
-	tokenTimeout = 30 * time.Second
-
 	// discoveryTimeout is the context deadline used during installation
 	// ID auto-discovery.
 	discoveryTimeout = 30 * time.Second
 )
 
 // TokenSource is the interface for anything that can supply a bearer token.
+// The caller's context is passed so that token refresh respects cancellation
+// and deadlines from the calling code (e.g. an incoming HTTP request).
 type TokenSource interface {
-	Token() (string, error)
+	Token(ctx context.Context) (string, error)
 }
 
 // StaticTokenSource returns a fixed token (used for GITHUB_TOKEN / OAuth tokens).
@@ -38,7 +36,7 @@ func NewStaticTokenSource(token string) *StaticTokenSource {
 	return &StaticTokenSource{token: token}
 }
 
-func (s *StaticTokenSource) Token() (string, error) {
+func (s *StaticTokenSource) Token(_ context.Context) (string, error) {
 	return s.token, nil
 }
 
@@ -88,11 +86,10 @@ func NewGitHubAppTokenSource(appID, privateKeyPEM, installationID string) (*GitH
 	return &GitHubAppTokenSource{transport: tr}, nil
 }
 
-// Token returns a valid installation access token, refreshing automatically when near expiry.
-// A bounded timeout context is used to prevent indefinite hangs during token refresh.
-func (g *GitHubAppTokenSource) Token() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), tokenTimeout)
-	defer cancel()
+// Token returns a valid installation access token, refreshing automatically when
+// near expiry. The provided context is propagated to the underlying network call
+// so that cancellation and deadlines from the caller are respected.
+func (g *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 	return g.transport.Token(ctx)
 }
 
