@@ -8,8 +8,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
+)
+
+const (
+	// tokenTimeout is the context deadline used when fetching/refreshing
+	// installation access tokens to avoid unbounded hangs.
+	tokenTimeout = 30 * time.Second
+
+	// discoveryTimeout is the context deadline used during installation
+	// ID auto-discovery.
+	discoveryTimeout = 30 * time.Second
 )
 
 // TokenSource is the interface for anything that can supply a bearer token.
@@ -42,8 +53,9 @@ type GitHubAppTokenSource struct {
 // Literal "\n" sequences in the string are converted to real newlines so the
 // value can be stored as a single-line environment variable.
 // If installationID is empty the installation is discovered automatically via
-// the GitHub API (works when the App has exactly one installation, which is the
-// common case for personal or single-org Apps).
+// the GitHub API. Auto-discovery succeeds only when the App has exactly one
+// installation; set GITHUB_APP_INSTALLATION_ID explicitly when the App is
+// installed on multiple accounts or organisations.
 func NewGitHubAppTokenSource(appID, privateKeyPEM, installationID string) (*GitHubAppTokenSource, error) {
 	privateKeyPEM = strings.ReplaceAll(privateKeyPEM, `\n`, "\n")
 
@@ -64,7 +76,9 @@ func NewGitHubAppTokenSource(appID, privateKeyPEM, installationID string) (*GitH
 			return nil, fmt.Errorf("parse installation ID %q: %w", installationID, err)
 		}
 	} else {
-		instID, err = discoverInstallationID(atr)
+		ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+		defer cancel()
+		instID, err = discoverInstallationID(ctx, atr)
 		if err != nil {
 			return nil, fmt.Errorf("auto-discover GitHub App installation ID: %w", err)
 		}
@@ -75,16 +89,20 @@ func NewGitHubAppTokenSource(appID, privateKeyPEM, installationID string) (*GitH
 }
 
 // Token returns a valid installation access token, refreshing automatically when near expiry.
+// A bounded timeout context is used to prevent indefinite hangs during token refresh.
 func (g *GitHubAppTokenSource) Token() (string, error) {
-	return g.transport.Token(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), tokenTimeout)
+	defer cancel()
+	return g.transport.Token(ctx)
 }
 
 // discoverInstallationID fetches the list of installations for the GitHub App
-// and returns the ID of the first one. This covers the common case where the
-// App is installed on exactly one account or organisation.
-func discoverInstallationID(atr *ghinstallation.AppsTransport) (int64, error) {
+// and returns the installation ID. It errors if the App has zero installations
+// (not installed anywhere) or more than one installation (ambiguous — the caller
+// must set GITHUB_APP_INSTALLATION_ID explicitly in that case).
+func discoverInstallationID(ctx context.Context, atr *ghinstallation.AppsTransport) (int64, error) {
 	client := &http.Client{Transport: atr}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/app/installations", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/app/installations", nil)
 	if err != nil {
 		return 0, err
 	}
@@ -111,9 +129,13 @@ func discoverInstallationID(atr *ghinstallation.AppsTransport) (int64, error) {
 	if err := json.Unmarshal(body, &installations); err != nil {
 		return 0, fmt.Errorf("parse installations response: %w", err)
 	}
-	if len(installations) == 0 {
+	switch len(installations) {
+	case 0:
 		return 0, fmt.Errorf("GitHub App has no installations; install it on your account or organisation first, " +
 			"or set GITHUB_APP_INSTALLATION_ID explicitly")
+	case 1:
+		return installations[0].ID, nil
+	default:
+		return 0, fmt.Errorf("GitHub App has %d installations; set GITHUB_APP_INSTALLATION_ID explicitly to select one", len(installations))
 	}
-	return installations[0].ID, nil
 }

@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+const openAITimeout = 120 * time.Second
 
 // OpenAIProvider implements LLMProvider for OpenAI.
 type OpenAIProvider struct {
@@ -16,8 +20,10 @@ type OpenAIProvider struct {
 }
 
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
+	cfg := openai.DefaultConfig(apiKey)
+	cfg.HTTPClient = &http.Client{Timeout: openAITimeout}
 	return &OpenAIProvider{
-		client: openai.NewClient(apiKey),
+		client: openai.NewClientWithConfig(cfg),
 		models: []string{"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"},
 	}
 }

@@ -135,28 +135,10 @@ agent pipeline, viewing generated files, reviewing code, and iterating.`,
 // buildCopilotProvider creates a CopilotProvider using either GitHub App
 // installation credentials (preferred) or a static GITHUB_TOKEN.
 func buildCopilotProvider() (*llm.CopilotProvider, error) {
-	appID := config.GetGitHubAppID()
-	privateKeyPEM := config.GetGitHubAppPrivateKey()
-	installationID := config.GetGitHubAppInstallationID()
-
-	if appID != "" && privateKeyPEM != "" {
-		// installationID is optional: if empty it will be auto-discovered.
-		ts, err := llm.NewGitHubAppTokenSource(appID, privateKeyPEM, installationID)
-		if err != nil {
-			return nil, fmt.Errorf("create GitHub App token source: %w", err)
-		}
-		return llm.NewCopilotProviderWithTokenSource(ts), nil
-	}
-
-	token := config.GetGitHubToken()
-	if token == "" {
-		return nil, fmt.Errorf(
-			"Copilot provider requires either:\n" +
-				"  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH)\n" +
-				"  • GITHUB_TOKEN (OAuth token from `gh auth token`)",
-		)
-	}
-	return llm.NewCopilotProvider(token), nil
+	return llm.BuildCopilotProvider(
+		config.GetGitHubAppID(), config.GetGitHubAppPrivateKey(),
+		config.GetGitHubAppInstallationID(), config.GetGitHubToken(),
+	)
 }
 
 func buildPipeline(cfg *config.Config) (*agents.OrchestratorAgent, error) {

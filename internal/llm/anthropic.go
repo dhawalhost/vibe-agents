@@ -3,10 +3,14 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+const anthropicTimeout = 120 * time.Second
 
 // AnthropicProvider implements LLMProvider for Anthropic Claude.
 type AnthropicProvider struct {
@@ -15,7 +19,10 @@ type AnthropicProvider struct {
 }
 
 func NewAnthropicProvider(apiKey string) *AnthropicProvider {
-	c := anthropic.NewClient(option.WithAPIKey(apiKey))
+	c := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithHTTPClient(&http.Client{Timeout: anthropicTimeout}),
+	)
 	return &AnthropicProvider{
 		client: &c,
 		models: []string{"claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"},
