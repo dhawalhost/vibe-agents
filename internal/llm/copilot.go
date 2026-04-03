@@ -1,27 +1,48 @@
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const (
-	CopilotAPIEndpoint = "https://api.githubcopilot.com/chat/completions"
-	CopilotAPIVersion  = "2023-07-07"
+	CopilotBaseURL    = "https://api.githubcopilot.com"
+	CopilotAPIVersion = "2023-07-07"
 )
 
-// CopilotProvider implements LLMProvider for GitHub Copilot
-type CopilotProvider struct {
+// copilotTransport is an http.RoundTripper that injects the Copilot-specific
+// request headers and the bearer token obtained from a TokenSource.
+type copilotTransport struct {
 	tokenSource TokenSource
-	httpClient  *http.Client
-	models      []string
+	base        http.RoundTripper
+}
+
+func (t *copilotTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	token, err := t.tokenSource.Token()
+	if err != nil {
+		return nil, fmt.Errorf("get Copilot token: %w", err)
+	}
+	// Clone the request before mutating headers (required by RoundTripper contract).
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Copilot-Integration-Id", "vibe-agents")
+	req.Header.Set("Editor-Version", "vibe-agents/1.0.0")
+	req.Header.Set("User-Agent", "vibe-agents/1.0.0")
+	return t.base.RoundTrip(req)
+}
+
+// CopilotProvider implements LLMProvider for GitHub Copilot.
+// It uses the go-openai SDK pointed at the Copilot API endpoint, with a custom
+// transport that supplies the dynamic bearer token and Copilot-specific headers.
+type CopilotProvider struct {
+	client *openai.Client
+	models []string
 }
 
 // NewCopilotProvider creates a new GitHub Copilot provider using a static token
@@ -31,14 +52,20 @@ func NewCopilotProvider(token string) *CopilotProvider {
 }
 
 // NewCopilotProviderWithTokenSource creates a new GitHub Copilot provider that
-// obtains its bearer token from the given TokenSource.  Use this with
+// obtains its bearer token from the given TokenSource. Use this with
 // GitHubAppTokenSource to authenticate via a GitHub App installation.
 func NewCopilotProviderWithTokenSource(ts TokenSource) *CopilotProvider {
-	return &CopilotProvider{
-		tokenSource: ts,
-		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+	cfg := openai.DefaultConfig("") // auth is handled by the transport
+	cfg.BaseURL = CopilotBaseURL
+	cfg.HTTPClient = &http.Client{
+		Timeout: 120 * time.Second,
+		Transport: &copilotTransport{
+			tokenSource: ts,
+			base:        http.DefaultTransport,
 		},
+	}
+	return &CopilotProvider{
+		client: openai.NewClientWithConfig(cfg),
 		models: []string{
 			"gpt-4o",
 			"gpt-4o-mini",
@@ -50,64 +77,23 @@ func NewCopilotProviderWithTokenSource(ts TokenSource) *CopilotProvider {
 	}
 }
 
-func (p *CopilotProvider) Name() string {
-	return "copilot"
-}
+func (p *CopilotProvider) Name() string     { return "copilot" }
+func (p *CopilotProvider) Models() []string { return p.models }
 
-func (p *CopilotProvider) Models() []string {
-	return p.models
-}
-
-type copilotRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	Stream      bool      `json:"stream"`
-	N           int       `json:"n,omitempty"`
-}
-
-type copilotResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	Model   string `json:"model"`
-	Choices []struct {
-		Index   int `json:"index"`
-		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
-}
-
-type copilotStreamChunk struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	Model   string `json:"model"`
-	Choices []struct {
-		Index int `json:"index"`
-		Delta struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
-		} `json:"delta"`
-		FinishReason *string `json:"finish_reason"`
-	} `json:"choices"`
-}
-
-func (p *CopilotProvider) buildMessages(req LLMRequest) []Message {
-	var messages []Message
+func (p *CopilotProvider) buildMessages(req LLMRequest) []openai.ChatCompletionMessage {
+	var messages []openai.ChatCompletionMessage
 	if req.SystemPrompt != "" {
-		messages = append(messages, Message{Role: "system", Content: req.SystemPrompt})
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: req.SystemPrompt,
+		})
 	}
-	messages = append(messages, req.Messages...)
+	for _, m := range req.Messages {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		})
+	}
 	return messages
 }
 
@@ -115,62 +101,31 @@ func (p *CopilotProvider) Generate(ctx context.Context, req LLMRequest) (*LLMRes
 	if req.Model == "" {
 		req.Model = "gpt-4o"
 	}
-	if req.MaxTokens == 0 {
-		req.MaxTokens = 4096
+
+	r := openai.ChatCompletionRequest{
+		Model:    req.Model,
+		Messages: p.buildMessages(req),
+		N:        1,
+	}
+	if req.MaxTokens > 0 {
+		r.MaxTokens = req.MaxTokens
+	}
+	if req.Temperature > 0 {
+		r.Temperature = float32(req.Temperature)
 	}
 
-	payload := copilotRequest{
-		Model:       req.Model,
-		Messages:    p.buildMessages(req),
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      false,
-		N:           1,
-	}
-
-	data, err := json.Marshal(payload)
+	resp, err := p.client.CreateChatCompletion(ctx, r)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("copilot: %w", err)
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, CopilotAPIEndpoint, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("copilot: no choices in response")
 	}
-
-	if err := p.setHeaders(httpReq); err != nil {
-		return nil, err
-	}
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var copResp copilotResponse
-	if err := json.Unmarshal(body, &copResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	if len(copResp.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
-	}
-
 	return &LLMResponse{
-		Content:    copResp.Choices[0].Message.Content,
-		Model:      copResp.Model,
+		Content:    resp.Choices[0].Message.Content,
+		Model:      resp.Model,
 		Provider:   p.Name(),
-		TokensUsed: copResp.Usage.TotalTokens,
+		TokensUsed: resp.Usage.TotalTokens,
 	}, nil
 }
 
@@ -178,69 +133,42 @@ func (p *CopilotProvider) GenerateStream(ctx context.Context, req LLMRequest) (<
 	if req.Model == "" {
 		req.Model = "gpt-4o"
 	}
-	if req.MaxTokens == 0 {
-		req.MaxTokens = 4096
+
+	r := openai.ChatCompletionRequest{
+		Model:    req.Model,
+		Messages: p.buildMessages(req),
+		Stream:   true,
+		N:        1,
+	}
+	if req.MaxTokens > 0 {
+		r.MaxTokens = req.MaxTokens
+	}
+	if req.Temperature > 0 {
+		r.Temperature = float32(req.Temperature)
 	}
 
-	payload := copilotRequest{
-		Model:       req.Model,
-		Messages:    p.buildMessages(req),
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      true,
-		N:           1,
-	}
-
-	data, err := json.Marshal(payload)
+	stream, err := p.client.CreateChatCompletionStream(ctx, r)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, CopilotAPIEndpoint, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	if err := p.setHeaders(httpReq); err != nil {
-		return nil, err
-	}
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("execute request: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("copilot: create stream: %w", err)
 	}
 
 	ch := make(chan StreamChunk, 100)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
+		defer stream.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
+		for {
+			resp, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
 				ch <- StreamChunk{Done: true}
 				return
 			}
-
-			var chunk copilotStreamChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue
+			if err != nil {
+				ch <- StreamChunk{Error: fmt.Errorf("copilot stream: %w", err)}
+				return
 			}
-
-			if len(chunk.Choices) > 0 {
-				content := chunk.Choices[0].Delta.Content
+			if len(resp.Choices) > 0 {
+				content := resp.Choices[0].Delta.Content
 				if content != "" {
 					select {
 					case ch <- StreamChunk{Content: content}:
@@ -249,31 +177,8 @@ func (p *CopilotProvider) GenerateStream(ctx context.Context, req LLMRequest) (<
 						return
 					}
 				}
-				if chunk.Choices[0].FinishReason != nil {
-					ch <- StreamChunk{Done: true}
-					return
-				}
 			}
 		}
-
-		if err := scanner.Err(); err != nil {
-			ch <- StreamChunk{Error: err}
-		}
 	}()
-
 	return ch, nil
-}
-
-func (p *CopilotProvider) setHeaders(req *http.Request) error {
-	token, err := p.tokenSource.Token()
-	if err != nil {
-		return fmt.Errorf("get Copilot token: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Copilot-Integration-Id", "vibe-agents")
-	req.Header.Set("Editor-Version", "vibe-agents/1.0.0")
-	req.Header.Set("User-Agent", "vibe-agents/1.0.0")
-	return nil
 }

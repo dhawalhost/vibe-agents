@@ -122,6 +122,9 @@ func GetGitHubAppID() string {
 
 // GetGitHubAppInstallationID returns the GitHub App Installation ID from
 // environment (GITHUB_APP_INSTALLATION_ID).
+// This is optional: when empty the installation ID is discovered automatically
+// via the GitHub API. Set it explicitly only when the App is installed on
+// multiple accounts or organisations and you need to choose a specific one.
 func GetGitHubAppInstallationID() string {
 	return os.Getenv("GITHUB_APP_INSTALLATION_ID")
 }

@@ -139,7 +139,8 @@ func buildCopilotProvider() (*llm.CopilotProvider, error) {
 	privateKeyPEM := config.GetGitHubAppPrivateKey()
 	installationID := config.GetGitHubAppInstallationID()
 
-	if appID != "" && privateKeyPEM != "" && installationID != "" {
+	if appID != "" && privateKeyPEM != "" {
+		// installationID is optional: if empty it will be auto-discovered.
 		ts, err := llm.NewGitHubAppTokenSource(appID, privateKeyPEM, installationID)
 		if err != nil {
 			return nil, fmt.Errorf("create GitHub App token source: %w", err)
@@ -151,7 +152,7 @@ func buildCopilotProvider() (*llm.CopilotProvider, error) {
 	if token == "" {
 		return nil, fmt.Errorf(
 			"Copilot provider requires either:\n" +
-				"  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH) + GITHUB_APP_INSTALLATION_ID\n" +
+				"  • GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH)\n" +
 				"  • GITHUB_TOKEN (OAuth token from `gh auth token`)",
 		)
 	}

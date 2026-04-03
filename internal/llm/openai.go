@@ -1,120 +1,127 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
-const OpenAIAPIEndpoint = "https://api.openai.com/v1/chat/completions"
-
-// OpenAIProvider implements LLMProvider for OpenAI
+// OpenAIProvider implements LLMProvider for OpenAI.
 type OpenAIProvider struct {
-	apiKey     string
-	httpClient *http.Client
-	models     []string
+	client *openai.Client
+	models []string
 }
 
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
-		models:     []string{"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"},
+		client: openai.NewClient(apiKey),
+		models: []string{"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"},
 	}
 }
 
-func (p *OpenAIProvider) Name() string    { return "openai" }
+func (p *OpenAIProvider) Name() string     { return "openai" }
 func (p *OpenAIProvider) Models() []string { return p.models }
+
+func (p *OpenAIProvider) buildMessages(req LLMRequest) []openai.ChatCompletionMessage {
+	var messages []openai.ChatCompletionMessage
+	if req.SystemPrompt != "" {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: req.SystemPrompt,
+		})
+	}
+	for _, m := range req.Messages {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		})
+	}
+	return messages
+}
 
 func (p *OpenAIProvider) Generate(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
 	if req.Model == "" {
 		req.Model = "gpt-4o"
 	}
 
-	var messages []Message
-	if req.SystemPrompt != "" {
-		messages = append(messages, Message{Role: "system", Content: req.SystemPrompt})
-	}
-	messages = append(messages, req.Messages...)
-
-	payload := map[string]interface{}{
-		"model":    req.Model,
-		"messages": messages,
-		"stream":   false,
+	r := openai.ChatCompletionRequest{
+		Model:    req.Model,
+		Messages: p.buildMessages(req),
 	}
 	if req.MaxTokens > 0 {
-		payload["max_tokens"] = req.MaxTokens
+		r.MaxTokens = req.MaxTokens
 	}
 	if req.Temperature > 0 {
-		payload["temperature"] = req.Temperature
+		r.Temperature = float32(req.Temperature)
 	}
 
-	data, err := json.Marshal(payload)
+	resp, err := p.client.CreateChatCompletion(ctx, r)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("openai: %w", err)
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, OpenAIAPIEndpoint, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("openai: no choices in response")
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Model string `json:"model"`
-		Usage struct {
-			TotalTokens int `json:"total_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
-	}
-
 	return &LLMResponse{
-		Content:    result.Choices[0].Message.Content,
-		Model:      result.Model,
+		Content:    resp.Choices[0].Message.Content,
+		Model:      resp.Model,
 		Provider:   p.Name(),
-		TokensUsed: result.Usage.TotalTokens,
+		TokensUsed: resp.Usage.TotalTokens,
 	}, nil
 }
 
 func (p *OpenAIProvider) GenerateStream(ctx context.Context, req LLMRequest) (<-chan StreamChunk, error) {
-	ch := make(chan StreamChunk, 1)
+	if req.Model == "" {
+		req.Model = "gpt-4o"
+	}
+
+	r := openai.ChatCompletionRequest{
+		Model:    req.Model,
+		Messages: p.buildMessages(req),
+		Stream:   true,
+	}
+	if req.MaxTokens > 0 {
+		r.MaxTokens = req.MaxTokens
+	}
+	if req.Temperature > 0 {
+		r.Temperature = float32(req.Temperature)
+	}
+
+	stream, err := p.client.CreateChatCompletionStream(ctx, r)
+	if err != nil {
+		return nil, fmt.Errorf("openai: create stream: %w", err)
+	}
+
+	ch := make(chan StreamChunk, 100)
 	go func() {
 		defer close(ch)
-		resp, err := p.Generate(ctx, req)
-		if err != nil {
-			ch <- StreamChunk{Error: err}
-			return
+		defer stream.Close()
+
+		for {
+			resp, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				ch <- StreamChunk{Done: true}
+				return
+			}
+			if err != nil {
+				ch <- StreamChunk{Error: fmt.Errorf("openai stream: %w", err)}
+				return
+			}
+			if len(resp.Choices) > 0 {
+				content := resp.Choices[0].Delta.Content
+				if content != "" {
+					select {
+					case ch <- StreamChunk{Content: content}:
+					case <-ctx.Done():
+						ch <- StreamChunk{Error: ctx.Err()}
+						return
+					}
+				}
+			}
 		}
-		ch <- StreamChunk{Content: resp.Content, Done: true}
 	}()
 	return ch, nil
 }
