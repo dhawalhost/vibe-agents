@@ -137,25 +137,34 @@ func GetGitHubAppInstallationID() string {
 //     env var.
 //  2. GITHUB_APP_PRIVATE_KEY_PATH — path to a PEM file on disk.
 //
-// Returns an empty string when neither variable is set.  If
+// Returns an empty string and nil error when neither variable is set. If
 // GITHUB_APP_PRIVATE_KEY_PATH is set but the file cannot be read, the error
-// is printed to stderr and an empty string is returned so the caller can
-// produce a clearer diagnostic.
-func GetGitHubAppPrivateKey() string {
+// is returned so callers can surface a clear diagnostic.
+func GetGitHubAppPrivateKeyWithError() (string, error) {
 	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
-		return v
+		return v, nil
 	}
 	if path := os.Getenv("GITHUB_APP_PRIVATE_KEY_PATH"); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read GITHUB_APP_PRIVATE_KEY_PATH %q: %v\n", path, err)
-			return ""
+			return "", fmt.Errorf("read GITHUB_APP_PRIVATE_KEY_PATH %q: %w", path, err)
 		}
-		return string(data)
+		return string(data), nil
 	}
-	return ""
+	return "", nil
 }
 
+// GetGitHubAppPrivateKey returns the GitHub App private key from environment.
+// Prefer GetGitHubAppPrivateKeyWithError when callers need deterministic
+// diagnostics for unreadable GITHUB_APP_PRIVATE_KEY_PATH values.
+func GetGitHubAppPrivateKey() string {
+	key, err := GetGitHubAppPrivateKeyWithError()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return ""
+	}
+	return key
+}
 // GetOpenAIKey returns the OpenAI API key from environment
 func GetOpenAIKey() string {
 	return os.Getenv("OPENAI_API_KEY")
