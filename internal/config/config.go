@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -91,18 +93,18 @@ func Load(cfgFile string) (*Config, error) {
 
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("provider", "copilot")
-	v.SetDefault("model", "gpt-4o")
-	v.SetDefault("agents.architect.model", "gpt-4o")
+	v.SetDefault("model", "auto")
+	v.SetDefault("agents.architect.model", "auto")
 	v.SetDefault("agents.architect.reasoning", "cot")
-	v.SetDefault("agents.planner.model", "gpt-4o")
+	v.SetDefault("agents.planner.model", "auto")
 	v.SetDefault("agents.planner.reasoning", "cot")
-	v.SetDefault("agents.builder.model", "gpt-4o")
+	v.SetDefault("agents.builder.model", "auto")
 	v.SetDefault("agents.builder.reasoning", "cot")
-	v.SetDefault("agents.reviewer.model", "gpt-4o")
+	v.SetDefault("agents.reviewer.model", "auto")
 	v.SetDefault("agents.reviewer.reasoning", "tot")
-	v.SetDefault("agents.tester.model", "gpt-4o")
+	v.SetDefault("agents.tester.model", "auto")
 	v.SetDefault("agents.tester.reasoning", "cot")
-	v.SetDefault("agents.iterator.model", "gpt-4o")
+	v.SetDefault("agents.iterator.model", "auto")
 	v.SetDefault("agents.iterator.reasoning", "react")
 	v.SetDefault("output.directory", "./output")
 	v.SetDefault("output.overwrite", false)
@@ -112,7 +114,18 @@ func setDefaults(v *viper.Viper) {
 
 // GetGitHubToken returns the GitHub token from environment
 func GetGitHubToken() string {
-	return os.Getenv("GITHUB_TOKEN")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
+	}
+
+	// Fallback to GitHub CLI auth when env var is not present.
+	// This helps when processes are launched from shells that did not inherit
+	// exported env vars but `gh auth` is already configured for the user.
+	out, err := exec.Command("gh", "auth", "token").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // GetGitHubAppID returns the GitHub App ID from environment (GITHUB_APP_ID).
@@ -165,6 +178,7 @@ func GetGitHubAppPrivateKey() string {
 	}
 	return key
 }
+
 // GetOpenAIKey returns the OpenAI API key from environment
 func GetOpenAIKey() string {
 	return os.Getenv("OPENAI_API_KEY")

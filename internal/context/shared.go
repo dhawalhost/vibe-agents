@@ -3,6 +3,7 @@ package context
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,12 +134,17 @@ func (c *SharedContext) ClearReviewNotes() {
 	c.UpdatedAt = time.Now()
 }
 
-// HasCriticalIssues returns true if any review note is critical
+// HasCriticalIssues returns true only for evidenced critical review notes.
+// Reviewer notes without a concrete file+line reference are treated as advisory
+// and should not block the pipeline.
 func (c *SharedContext) HasCriticalIssues() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, note := range c.ReviewNotes {
-		if note.Severity == types.SeverityCritical {
+		if note == nil {
+			continue
+		}
+		if note.Severity == types.SeverityCritical && strings.TrimSpace(note.File) != "" && note.Line > 0 {
 			return true
 		}
 	}

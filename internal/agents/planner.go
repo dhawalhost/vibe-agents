@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	sharedctx "github.com/dhawalhost/vibe-agents/internal/context"
 	"github.com/dhawalhost/vibe-agents/internal/llm"
@@ -49,7 +50,24 @@ func (p *PlannerAgent) Act(ctx context.Context, sharedCtx *sharedctx.SharedConte
 
 	tasks, err := parseTasks(response)
 	if err != nil {
-		return fmt.Errorf("parse tasks: %w", err)
+		initialParseErr := err
+		repairPrompt := fmt.Sprintf(
+			"Your previous response was not valid task JSON. Convert it to valid JSON now.\n\n"+
+				"Return ONLY a JSON array of tasks following this schema:\n%s\n\n"+
+				"Previous response to repair:\n%s",
+			prompt.TaskJSONSchema,
+			strings.TrimSpace(response),
+		)
+
+		repaired, repairErr := p.GenerateWithSystem(ctx, prompt.SystemPromptPlanner, repairPrompt)
+		if repairErr != nil {
+			return fmt.Errorf("parse tasks: %w (repair generation failed: %v)", err, repairErr)
+		}
+
+		tasks, err = parseTasks(repaired)
+		if err != nil {
+			return fmt.Errorf("parse tasks: %v (repair parse failed: %w)", initialParseErr, err)
+		}
 	}
 
 	sharedCtx.SetTaskGraph(tasks)
@@ -61,10 +79,29 @@ func parseTasks(response string) ([]*types.Task, error) {
 	if jsonStr == "" {
 		return nil, fmt.Errorf("no JSON found in planner response")
 	}
+	jsonStr = normalizeJSONCandidate(jsonStr)
 
 	var tasks []*types.Task
 	if err := json.Unmarshal([]byte(jsonStr), &tasks); err != nil {
-		return nil, fmt.Errorf("unmarshal tasks: %w", err)
+		// Some models wrap the task list in an object instead of returning a raw array.
+		var wrapped struct {
+			Tasks     []*types.Task `json:"tasks"`
+			TaskGraph []*types.Task `json:"task_graph"`
+			Data      []*types.Task `json:"data"`
+		}
+		if err2 := json.Unmarshal([]byte(jsonStr), &wrapped); err2 != nil {
+			return nil, fmt.Errorf("unmarshal tasks: %w", err)
+		}
+		switch {
+		case len(wrapped.Tasks) > 0:
+			tasks = wrapped.Tasks
+		case len(wrapped.TaskGraph) > 0:
+			tasks = wrapped.TaskGraph
+		case len(wrapped.Data) > 0:
+			tasks = wrapped.Data
+		default:
+			return nil, fmt.Errorf("unmarshal tasks: JSON did not contain a task array")
+		}
 	}
 
 	// Set all tasks to pending status

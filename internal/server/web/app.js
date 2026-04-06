@@ -3,6 +3,8 @@ const state = {
   currentJobID: null,
   currentFile: null,
   eventSource: null,
+  pipelineEnded: false,
+  finalError: '',
   agents: {
     architect: { name: 'Architect', icon: '🏗', status: 'pending' },
     planner:   { name: 'Planner',   icon: '📐', status: 'pending' },
@@ -28,6 +30,29 @@ const el = (tag, cls, html) => {
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $(`screen-${name}`).classList.add('active');
+}
+
+function setRunStatus(kind, text) {
+  const runStatus = $('run-status');
+  const runText = $('run-status-text');
+  if (!runStatus || !runText) return;
+  runStatus.classList.remove('running', 'done', 'error');
+  if (kind) runStatus.classList.add(kind);
+  runText.textContent = text;
+}
+
+function showFinalPipelineError(message) {
+  const box = $('pipeline-final-error');
+  if (!box) return;
+  box.textContent = `Final error: ${message}`;
+  box.classList.remove('hidden');
+}
+
+function hideFinalPipelineError() {
+  const box = $('pipeline-final-error');
+  if (!box) return;
+  box.textContent = '';
+  box.classList.add('hidden');
 }
 
 /* ── Agent status helpers ───────────────────────────── */
@@ -84,6 +109,8 @@ function escHtml(str) {
 /* ── SSE connection ─────────────────────────────────── */
 function connectSSE(jobID) {
   if (state.eventSource) state.eventSource.close();
+  state.pipelineEnded = false;
+  state.finalError = '';
 
   const es = new EventSource(`/api/events/${jobID}`);
   state.eventSource = es;
@@ -93,7 +120,23 @@ function connectSSE(jobID) {
   ['agent_start', 'agent_complete', 'thought', 'file_created',
    'review_note', 'pipeline_complete', 'error'].forEach(handle);
 
-  es.onerror = () => addLog('error', '', 'SSE connection lost');
+  es.onerror = () => {
+    if (state.pipelineEnded) {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+      return;
+    }
+    state.pipelineEnded = true;
+    addLog('error', '', state.finalError || 'SSE connection lost. Pipeline ended.');
+    showFinalPipelineError(state.finalError || 'SSE connection lost. Pipeline ended.');
+    setRunStatus('error', 'Stopped');
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+  };
 }
 
 function handleEvent(type, data) {
@@ -126,14 +169,27 @@ function handleEvent(type, data) {
       break;
 
     case 'pipeline_complete':
-      if (state.eventSource) state.eventSource.close();
+      state.pipelineEnded = true;
+      setRunStatus('done', 'Completed');
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
       setTimeout(() => loadResults(state.currentJobID), 300);
       break;
 
     case 'error':
+      state.pipelineEnded = true;
+      state.finalError = msg;
       Object.keys(state.agents).forEach(k => {
         if (state.agents[k].status === 'running') setAgentStatus(k, 'error');
       });
+      showFinalPipelineError(msg);
+      setRunStatus('error', 'Failed');
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
       showToast('Pipeline error: ' + msg, 'error');
       break;
   }
@@ -175,11 +231,15 @@ $('generate-form').addEventListener('submit', async e => {
     Object.keys(state.agents).forEach(k => state.agents[k].status = 'pending');
     state.fileCount = 0;
     state.thoughtCount = 0;
+    state.pipelineEnded = false;
+    state.finalError = '';
     $('log-output').innerHTML = '';
+    hideFinalPipelineError();
     renderAgentList();
     $('stat-files').textContent = '0';
     $('stat-thoughts').textContent = '0';
     $('pipeline-prompt-label').textContent = prompt;
+    setRunStatus('running', 'Running pipeline');
 
     showScreen('pipeline');
     connectSSE(job_id);
@@ -187,7 +247,7 @@ $('generate-form').addEventListener('submit', async e => {
     showToast('Error: ' + err.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.textContent = '✨ Generate';
+    btn.textContent = 'Start Build';
   }
 });
 
@@ -311,11 +371,15 @@ $('iterate-btn').addEventListener('click', async () => {
     });
     state.fileCount = 0;
     state.thoughtCount = 0;
+    state.pipelineEnded = false;
+    state.finalError = '';
     $('log-output').innerHTML = '';
+    hideFinalPipelineError();
     renderAgentList();
     $('stat-files').textContent = '0';
     $('stat-thoughts').textContent = '0';
     $('pipeline-prompt-label').textContent = 'Iterating: ' + feedback;
+    setRunStatus('running', 'Running iteration');
 
     showScreen('pipeline');
     connectSSE(state.currentJobID);
@@ -358,3 +422,12 @@ function langFromPath(path) {
 /* ── Init ───────────────────────────────────────────── */
 renderAgentList();
 showScreen('prompt');
+setRunStatus('', 'Idle');
+
+document.querySelectorAll('.prompt-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const val = chip.getAttribute('data-prompt') || '';
+    $('prompt-input').value = val;
+    $('prompt-input').focus();
+  });
+});

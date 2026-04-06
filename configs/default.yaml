@@ -1,24 +1,24 @@
 provider: copilot
-model: gpt-4o
+model: auto
 
 agents:
   architect:
-    model: gpt-4o
+    model: auto
     reasoning: cot
   planner:
-    model: gpt-4o
+    model: auto
     reasoning: cot
   builder:
-    model: gpt-4o
+    model: auto
     reasoning: cot
   reviewer:
-    model: gpt-4o
+    model: auto
     reasoning: tot
   tester:
-    model: gpt-4o
+    model: auto
     reasoning: cot
   iterator:
-    model: gpt-4o
+    model: auto
     reasoning: react
 
 output:
@@ -27,4 +27,4 @@ output:
 
 logging:
   level: info
-  chain_of_thought: true
+  chain_of_thought: false

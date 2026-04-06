@@ -77,11 +77,11 @@ Set GITHUB_TOKEN environment variable to authenticate.`,
 
 	// explain command
 	explainCmd := &cobra.Command{
-		Use:   "explain",
-		Short: "Show the chain of thought reasoning from last generation",
-		Long:  `Display the full chain-of-thought reasoning log from the last generation run.`,
+		Use:     "explain",
+		Short:   "Show the chain of thought reasoning from last generation",
+		Long:    `Display the full chain-of-thought reasoning log from the last generation run.`,
 		Example: `  vibe explain --project ./my-app`,
-		RunE: runExplain,
+		RunE:    runExplain,
 	}
 	explainCmd.Flags().StringP("project", "p", "./output", "path to the existing generated project")
 
@@ -198,31 +198,23 @@ func buildPipeline(cfg *config.Config) (*agents.OrchestratorAgent, error) {
 		mod = modelName
 	}
 
-	// Apply per-agent model overrides from config
-	architectModel := cfg.Agents.Architect.Model
-	if architectModel == "" {
-		architectModel = mod
+	// Use the selected model consistently across all agents for a predictable UX.
+	pickModel := func(agentCfgModel string) string {
+		if modelName != "" {
+			return modelName
+		}
+		if agentCfgModel != "" {
+			return agentCfgModel
+		}
+		return mod
 	}
-	plannerModel := cfg.Agents.Planner.Model
-	if plannerModel == "" {
-		plannerModel = mod
-	}
-	builderModel := cfg.Agents.Builder.Model
-	if builderModel == "" {
-		builderModel = mod
-	}
-	reviewerModel := cfg.Agents.Reviewer.Model
-	if reviewerModel == "" {
-		reviewerModel = mod
-	}
-	testerModel := cfg.Agents.Tester.Model
-	if testerModel == "" {
-		testerModel = mod
-	}
-	iteratorModel := cfg.Agents.Iterator.Model
-	if iteratorModel == "" {
-		iteratorModel = mod
-	}
+
+	architectModel := pickModel(cfg.Agents.Architect.Model)
+	plannerModel := pickModel(cfg.Agents.Planner.Model)
+	builderModel := pickModel(cfg.Agents.Builder.Model)
+	reviewerModel := pickModel(cfg.Agents.Reviewer.Model)
+	testerModel := pickModel(cfg.Agents.Tester.Model)
+	iteratorModel := pickModel(cfg.Agents.Iterator.Model)
 
 	// Create agents
 	architect := agents.NewArchitectAgent(prov, architectModel)

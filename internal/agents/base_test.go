@@ -15,7 +15,7 @@ type mockProvider struct {
 	response string
 }
 
-func (m *mockProvider) Name() string    { return "mock" }
+func (m *mockProvider) Name() string     { return "mock" }
 func (m *mockProvider) Models() []string { return []string{"mock-model"} }
 func (m *mockProvider) Generate(_ context.Context, _ llm.LLMRequest) (*llm.LLMResponse, error) {
 	return &llm.LLMResponse{Content: m.response, Model: "mock-model", Provider: "mock"}, nil
@@ -25,6 +25,34 @@ func (m *mockProvider) GenerateStream(_ context.Context, req llm.LLMRequest) (<-
 	go func() {
 		defer close(ch)
 		ch <- llm.StreamChunk{Content: m.response, Done: true}
+	}()
+	return ch, nil
+}
+
+type sequenceProvider struct {
+	responses []string
+	idx       int
+}
+
+func (s *sequenceProvider) Name() string     { return "mock" }
+func (s *sequenceProvider) Models() []string { return []string{"mock-model"} }
+func (s *sequenceProvider) Generate(_ context.Context, _ llm.LLMRequest) (*llm.LLMResponse, error) {
+	if len(s.responses) == 0 {
+		return &llm.LLMResponse{Content: "", Model: "mock-model", Provider: "mock"}, nil
+	}
+	if s.idx >= len(s.responses) {
+		last := s.responses[len(s.responses)-1]
+		return &llm.LLMResponse{Content: last, Model: "mock-model", Provider: "mock"}, nil
+	}
+	resp := s.responses[s.idx]
+	s.idx++
+	return &llm.LLMResponse{Content: resp, Model: "mock-model", Provider: "mock"}, nil
+}
+func (s *sequenceProvider) GenerateStream(_ context.Context, _ llm.LLMRequest) (<-chan llm.StreamChunk, error) {
+	ch := make(chan llm.StreamChunk, 1)
+	go func() {
+		defer close(ch)
+		ch <- llm.StreamChunk{Done: true}
 	}()
 	return ch, nil
 }
@@ -128,6 +156,38 @@ func TestArchitectActWithValidJSON(t *testing.T) {
 	}
 }
 
+func TestArchitectActRepairsNonJSONResponse(t *testing.T) {
+	provider := &sequenceProvider{responses: []string{
+		"Here is the high-level architecture in prose before I format it.",
+		`{
+			"tech_stack": {"language": "Go", "framework": "Gin", "database": "PostgreSQL", "deployment": "Docker"},
+			"folder_structure": [],
+			"database_schema": [],
+			"api_endpoints": [],
+			"auth_strategy": {"type": "JWT"},
+			"deployment_config": {"platform": "Docker", "containerized": true}
+		}`,
+	}}
+	architect := agents.NewArchitectAgent(provider, "mock-model")
+	ctx := sharedctx.New("Build a REST API")
+
+	err := architect.Act(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	bp := ctx.GetBlueprint()
+	if bp == nil {
+		t.Fatal("expected blueprint to be set after repair flow")
+	}
+	if bp.TechStack.Language != "Go" {
+		t.Errorf("expected Go, got %s", bp.TechStack.Language)
+	}
+	if provider.idx < 2 {
+		t.Errorf("expected architect to call provider twice, got %d calls", provider.idx)
+	}
+}
+
 func TestPlannerActWithValidJSON(t *testing.T) {
 	tasksJSON := `[
 		{"id": "task-1", "title": "Setup", "description": "Setup project", "dependencies": [], "files": ["main.go"], "priority": 1, "status": "pending"},
@@ -149,6 +209,55 @@ func TestPlannerActWithValidJSON(t *testing.T) {
 	}
 }
 
+func TestPlannerActRepairsNonJSONResponse(t *testing.T) {
+	provider := &sequenceProvider{responses: []string{
+		"I will provide tasks, but first here is a summary in plain text.",
+		`[
+			{"id": "task-1", "title": "Setup", "description": "Setup project", "dependencies": [], "files": ["main.go"], "priority": 1, "status": "pending"}
+		]`,
+	}}
+	planner := agents.NewPlannerAgent(provider, "mock-model")
+	ctx := sharedctx.New("Build a REST API")
+	ctx.SetBlueprint(&types.Blueprint{})
+
+	err := planner.Act(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tasks := ctx.GetTaskGraph()
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task after repair flow, got %d", len(tasks))
+	}
+	if provider.idx < 2 {
+		t.Errorf("expected planner to call provider twice, got %d calls", provider.idx)
+	}
+}
+
+func TestPlannerActRepairsTruncatedJSONLocally(t *testing.T) {
+	provider := &sequenceProvider{responses: []string{
+		`[
+			{"id": "task-1", "title": "Setup", "description": "Setup project", "dependencies": [], "files": ["main.go"], "priority": 1, "status": "pending"}
+		`,
+	}}
+	planner := agents.NewPlannerAgent(provider, "mock-model")
+	ctx := sharedctx.New("Build a REST API")
+	ctx.SetBlueprint(&types.Blueprint{})
+
+	err := planner.Act(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tasks := ctx.GetTaskGraph()
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task after local JSON repair, got %d", len(tasks))
+	}
+	if provider.idx != 1 {
+		t.Errorf("expected planner to recover locally without extra repair call, got %d calls", provider.idx)
+	}
+}
+
 func TestReviewerActWithValidJSON(t *testing.T) {
 	notesJSON := `[
 		{"file": "main.go", "severity": "warning", "category": "style", "message": "missing comment"}
@@ -166,5 +275,67 @@ func TestReviewerActWithValidJSON(t *testing.T) {
 	notes := ctx.GetReviewNotes()
 	if len(notes) != 1 {
 		t.Errorf("expected 1 review note, got %d", len(notes))
+	}
+}
+
+func TestReviewerAct_DowngradesSpeculativeCriticalWithoutLine(t *testing.T) {
+	notesJSON := `[
+		{"file": "src/services/subscriptionService.js", "severity": "critical", "category": "security", "message": "Potential for SQL injection if user input is not sanitized."}
+	]`
+	mock := &mockProvider{response: notesJSON}
+	reviewer := agents.NewReviewerAgent(mock, "mock-model")
+	ctx := sharedctx.New("test")
+	ctx.SetFile("src/services/subscriptionService.js", "const sql = 'select 1';")
+
+	err := reviewer.Act(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	notes := ctx.GetReviewNotes()
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 review note, got %d", len(notes))
+	}
+	if notes[0].Severity != types.SeverityWarning {
+		t.Fatalf("expected speculative critical note to be downgraded to warning, got %q", notes[0].Severity)
+	}
+}
+
+func TestOrchestratorRun_ReviewerDoesNotBlockPipeline(t *testing.T) {
+	provider := &sequenceProvider{responses: []string{
+		`{
+			"tech_stack": {"language": "Go", "framework": "Gin", "database": "PostgreSQL", "deployment": "Docker"},
+			"folder_structure": [],
+			"database_schema": [],
+			"api_endpoints": [],
+			"auth_strategy": {"type": "JWT"},
+			"deployment_config": {"platform": "Docker", "containerized": true}
+		}`,
+		`[
+			{"id": "task-1", "title": "Setup", "description": "Setup project", "dependencies": [], "files": ["main.go"], "priority": 1, "status": "pending"}
+		]`,
+		"=== FILE: main.go ===\npackage main\n\nfunc main() {}\n=== END FILE ===",
+		`[
+			{"file": "main.go", "line": 12, "severity": "critical", "category": "security", "message": "Hardcoded secret found.", "suggestion": "Move it to env vars."}
+		]`,
+		"=== FILE: main_test.go ===\npackage main\n\nfunc TestMain(t *testing.T) {}\n=== END FILE ===",
+	}}
+
+	architect := agents.NewArchitectAgent(provider, "mock-model")
+	planner := agents.NewPlannerAgent(provider, "mock-model")
+	builder := agents.NewBuilderAgent(provider, "mock-model")
+	reviewer := agents.NewReviewerAgent(provider, "mock-model")
+	tester := agents.NewTesterAgent(provider, "mock-model")
+	iterator := agents.NewIteratorAgent(provider, "mock-model")
+	orchestrator := agents.NewOrchestratorAgent(provider, "mock-model", architect, planner, builder, reviewer, tester, iterator)
+
+	ctx := sharedctx.New("Build a tiny app")
+	err := orchestrator.Run(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("expected reviewer to be advisory-only, got error: %v", err)
+	}
+
+	if _, ok := ctx.GetFile("main_test.go"); !ok {
+		t.Fatal("expected tester to run and generate test file even after reviewer critical notes")
 	}
 }

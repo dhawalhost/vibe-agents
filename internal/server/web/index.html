@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vibe Agents</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
   <!-- Prism.js for syntax highlighting (loaded from CDN) -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css"
@@ -13,11 +16,19 @@
 <body>
 <div id="app">
 
-  <!-- ── Header ─────────────────────────────────────── -->
-  <header>
-    <span style="font-size:22px">🤖</span>
-    <h1>Vibe Agents</h1>
-    <span class="version">v1.0.0</span>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">VA</div>
+      <div class="brand-copy">
+        <h1>Vibe Agents</h1>
+        <p>Multi-agent software factory</p>
+      </div>
+      <span class="version">v1.0.0</span>
+    </div>
+    <div class="run-status" id="run-status">
+      <span class="status-dot"></span>
+      <span id="run-status-text">Idle</span>
+    </div>
   </header>
 
   <div class="main-content">
@@ -27,8 +38,14 @@
     <!-- ══════════════════════════════════════════════ -->
     <section id="screen-prompt" class="screen">
       <div class="prompt-card">
-        <h2>✨ Build something amazing</h2>
-        <p class="subtitle">Describe the system you want, and the agent pipeline will design, code, review and test it.</p>
+        <h2>Design. Build. Review. Ship.</h2>
+        <p class="subtitle">Describe what you want. The pipeline will architect, plan, generate, review, and test in one flow.</p>
+
+        <div class="prompt-chips">
+          <button class="prompt-chip" type="button" data-prompt="Build a production-ready billing SaaS with auth, teams, and Stripe.">SaaS billing platform</button>
+          <button class="prompt-chip" type="button" data-prompt="Create a realtime analytics dashboard with ingestion API, metrics store, and alerting.">Realtime analytics</button>
+          <button class="prompt-chip" type="button" data-prompt="Generate a secure REST API with RBAC, audit logs, and PostgreSQL.">Secure backend API</button>
+        </div>
 
         <form id="generate-form">
           <div class="form-group">
@@ -52,7 +69,7 @@
             </div>
             <div class="form-group">
               <label for="model-input">Model</label>
-              <input id="model-input" type="text" placeholder="gpt-4o" value="gpt-4o" />
+              <input id="model-input" type="text" placeholder="auto" value="auto" />
             </div>
           </div>
 
@@ -62,7 +79,7 @@
           </div>
 
           <button type="submit" class="btn btn-primary" id="generate-btn" style="width:100%;justify-content:center;margin-top:8px">
-            ✨ Generate
+            Start Build
           </button>
         </form>
       </div>
@@ -96,6 +113,7 @@
           <h3>Live Output</h3>
           <button class="btn btn-secondary btn-sm" onclick="document.getElementById('log-output').innerHTML=''">Clear</button>
         </div>
+        <div id="pipeline-final-error" class="pipeline-final-error hidden"></div>
         <div id="log-output"></div>
       </div>
 

@@ -162,6 +162,12 @@ Review for:
 5. Consistency - is the code consistent across files?
 6. Missing pieces - are there critical gaps?
 
+Severity rules:
+- Use "critical" ONLY for directly observable, high-confidence blockers in the shown code.
+- Every critical note MUST include a specific file and exact line number from the shown code.
+- If the issue is speculative, missing context, or phrased as "potential / may / might / if unsanitized", mark it as "warning" instead.
+- Do not invent security issues unless the displayed code clearly demonstrates them.
+
 Return a JSON array of review notes:
 [
   {

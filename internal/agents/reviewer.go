@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	sharedctx "github.com/dhawalhost/vibe-agents/internal/context"
 	"github.com/dhawalhost/vibe-agents/internal/llm"
@@ -92,5 +93,61 @@ func parseReviewNotes(response string) ([]*types.ReviewNote, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &notes); err != nil {
 		return nil, fmt.Errorf("unmarshal review notes: %w", err)
 	}
-	return notes, nil
+	return normalizeReviewNotes(notes), nil
+}
+
+func normalizeReviewNotes(notes []*types.ReviewNote) []*types.ReviewNote {
+	for _, note := range notes {
+		if note == nil {
+			continue
+		}
+		note.File = strings.TrimSpace(note.File)
+		note.Category = strings.TrimSpace(strings.ToLower(note.Category))
+		note.Message = strings.TrimSpace(note.Message)
+		note.Suggestion = strings.TrimSpace(note.Suggestion)
+
+		switch strings.ToLower(strings.TrimSpace(string(note.Severity))) {
+		case string(types.SeverityCritical):
+			note.Severity = types.SeverityCritical
+		case string(types.SeveritySuggestion):
+			note.Severity = types.SeveritySuggestion
+		default:
+			note.Severity = types.SeverityWarning
+		}
+
+		if note.Severity == types.SeverityCritical && shouldDowngradeCriticalReviewNote(note) {
+			note.Severity = types.SeverityWarning
+		}
+	}
+	return notes
+}
+
+func shouldDowngradeCriticalReviewNote(note *types.ReviewNote) bool {
+	if note == nil {
+		return false
+	}
+	if strings.TrimSpace(note.File) == "" || note.Line <= 0 {
+		return true
+	}
+
+	text := strings.ToLower(strings.TrimSpace(note.Message + " " + note.Suggestion))
+	speculativePhrases := []string{
+		"potential",
+		"if user input",
+		"if the input",
+		"if input",
+		"may ",
+		"might ",
+		"could ",
+		"consider",
+		"not validated",
+		"not sanitized",
+		"low cost factor",
+	}
+	for _, phrase := range speculativePhrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }

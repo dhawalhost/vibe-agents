@@ -196,8 +196,11 @@ func (srv *Server) buildPipeline(providerName, modelName string) (*agents.Orches
 		mod = modelName
 	}
 
-	// Per-agent model overrides from config.
+	// Use the selected model consistently across all agents for a predictable UX.
 	pick := func(agentCfgModel string) string {
+		if modelName != "" {
+			return modelName
+		}
 		if agentCfgModel != "" {
 			return agentCfgModel
 		}

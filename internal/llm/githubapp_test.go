@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // roundTripFunc allows using a plain function as an http.RoundTripper.
@@ -169,5 +172,157 @@ func TestBuildCopilotProvider_InvalidAppID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse GitHub App ID") {
 		t.Fatalf("error %q does not contain expected substring", err.Error())
+	}
+}
+
+func TestBuildCopilotProvider_InvalidAppIDFallsBackToToken(t *testing.T) {
+	p, err := BuildCopilotProvider("not-a-number", "fake-pem", "", "token-fallback")
+	if err != nil {
+		t.Fatalf("unexpected error with token fallback: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestBuildCopilotProvider_PrefersTokenWhenBothProvided(t *testing.T) {
+	// Invalid App credentials should be ignored when a static OAuth token exists.
+	p, err := BuildCopilotProvider("not-a-number", "fake-pem", "", "token-preferred")
+	if err != nil {
+		t.Fatalf("unexpected error when token is provided: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+type staticErrorTokenSource struct {
+	err error
+}
+
+func (s *staticErrorTokenSource) Token(context.Context) (string, error) {
+	return "", s.err
+}
+
+func TestFailoverTokenSource_UsesSecondaryWhenPrimaryFails(t *testing.T) {
+	fts := &failoverTokenSource{
+		primary:   &staticErrorTokenSource{err: errors.New("boom")},
+		secondary: NewStaticTokenSource("secondary-token"),
+	}
+
+	tok, err := fts.Token(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok != "secondary-token" {
+		t.Fatalf("got %q, want %q", tok, "secondary-token")
+	}
+}
+
+func TestNormalizeCopilotModel(t *testing.T) {
+	if got := normalizeCopilotModel("gpt-4o"); got != "gpt-4o-mini-2024-07-18" {
+		t.Fatalf("got %q, want %q", got, "gpt-4o-mini-2024-07-18")
+	}
+	if got := normalizeCopilotModel(""); got != "auto" {
+		t.Fatalf("got %q, want %q", got, "auto")
+	}
+	if got := normalizeCopilotModel("auto"); got != "auto" {
+		t.Fatalf("got %q, want %q", got, "auto")
+	}
+	if got := normalizeCopilotModel("gpt-4o-mini"); got != "gpt-4o-mini-2024-07-18" {
+		t.Fatalf("got %q, want %q", got, "gpt-4o-mini-2024-07-18")
+	}
+	if got := normalizeCopilotModel("claude-sonnet-4"); got != "claude-sonnet-4" {
+		t.Fatalf("got %q, want unchanged model", got)
+	}
+}
+
+func TestResolveModel_AutoRemembersSuccessfulModel(t *testing.T) {
+	p := &CopilotProvider{}
+	if got := p.resolveModel(context.Background(), "auto"); got != "gpt-4o-mini-2024-07-18" {
+		t.Fatalf("got %q, want %q", got, "gpt-4o-mini-2024-07-18")
+	}
+	p.rememberWorkingModel("gpt-4.1")
+	if got := p.resolveModel(context.Background(), "auto"); got != "gpt-4.1" {
+		t.Fatalf("got %q, want remembered model %q", got, "gpt-4.1")
+	}
+}
+
+func TestApplyCopilotTokenLimit(t *testing.T) {
+	req := openai.ChatCompletionRequest{Model: "gpt-5-mini"}
+	applyCopilotTokenLimit(&req, 123)
+	if req.MaxCompletionTokens != 123 {
+		t.Fatalf("got max_completion_tokens %d, want %d", req.MaxCompletionTokens, 123)
+	}
+	if req.MaxTokens != 0 {
+		t.Fatalf("got max_tokens %d, want 0", req.MaxTokens)
+	}
+
+	req = openai.ChatCompletionRequest{Model: "gpt-4o-mini-2024-07-18"}
+	applyCopilotTokenLimit(&req, 77)
+	if req.MaxTokens != 77 {
+		t.Fatalf("got max_tokens %d, want %d", req.MaxTokens, 77)
+	}
+}
+
+func TestApplyCopilotTemperature(t *testing.T) {
+	req := openai.ChatCompletionRequest{Model: "gpt-5-mini"}
+	applyCopilotTemperature(&req, 0.3)
+	if req.Temperature != 0 {
+		t.Fatalf("got temperature %v, want 0 for gpt-5-mini", req.Temperature)
+	}
+
+	req = openai.ChatCompletionRequest{Model: "gpt-4.1"}
+	applyCopilotTemperature(&req, 0.3)
+	if req.Temperature != float32(0.3) {
+		t.Fatalf("got temperature %v, want 0.3", req.Temperature)
+	}
+}
+
+func TestIsRetryableCopilotModelError_422UnprocessableEntity(t *testing.T) {
+	err := errors.New("error, status code: 422, status: 422 Unprocessable Entity, message: invalid character 'U' looking for beginning of value, body: Unprocessable Entity")
+	if !isRetryableCopilotModelError(err) {
+		t.Fatal("expected plain-text 422 Copilot response to remain eligible for fallback")
+	}
+}
+
+func TestFallbackModels_SkipsGPT5MiniForChatFallbacks(t *testing.T) {
+	p := &CopilotProvider{}
+	models := p.fallbackModels(context.Background(), "gpt-4o-mini-2024-07-18")
+	for _, model := range models {
+		if model == "gpt-5-mini" {
+			t.Fatalf("unexpected gpt-5-mini in fallback list: %v", models)
+		}
+	}
+}
+
+func TestCopilotTransport_SetsOpenAIIntentHeader(t *testing.T) {
+	var captured *http.Request
+	tr := &copilotTransport{
+		tokenSource: NewStaticTokenSource("test-token"),
+		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			captured = r.Clone(r.Context())
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+				Request:    r,
+			}, nil
+		}),
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.githubcopilot.com/chat/completions", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("expected request to be captured")
+	}
+	if got := captured.Header.Get("OpenAI-Intent"); got != "conversation-panel" {
+		t.Fatalf("got OpenAI-Intent %q, want %q", got, "conversation-panel")
 	}
 }

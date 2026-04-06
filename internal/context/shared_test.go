@@ -91,9 +91,14 @@ func TestHasCriticalIssues(t *testing.T) {
 		t.Error("expected no critical issues with only warnings")
 	}
 
-	ctx.AddReviewNote(&types.ReviewNote{Severity: types.SeverityCritical})
+	ctx.AddReviewNote(&types.ReviewNote{Severity: types.SeverityCritical, File: "auth.js"})
+	if ctx.HasCriticalIssues() {
+		t.Error("expected non-evidenced critical note to not block pipeline")
+	}
+
+	ctx.AddReviewNote(&types.ReviewNote{Severity: types.SeverityCritical, File: "auth.js", Line: 42})
 	if !ctx.HasCriticalIssues() {
-		t.Error("expected critical issues")
+		t.Error("expected evidenced critical issues to block pipeline")
 	}
 }
 

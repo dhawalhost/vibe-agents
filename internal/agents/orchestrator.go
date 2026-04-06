@@ -9,8 +9,6 @@ import (
 	"github.com/dhawalhost/vibe-agents/pkg/types"
 )
 
-const maxReviewRetries = 3
-
 // OrchestratorAgent coordinates all other agents
 type OrchestratorAgent struct {
 	*BaseAgent
@@ -49,9 +47,9 @@ func (o *OrchestratorAgent) Think(ctx context.Context, sharedCtx *sharedctx.Shar
 		"Phase 1: Routing to Architect for system design",
 		"Phase 2: Will send blueprint to Planner for task decomposition",
 		"Phase 3: Builder will generate code for each task",
-		"Phase 4: Reviewer will validate generated code",
+		"Phase 4: Reviewer will validate generated code and surface notes",
 		"Phase 5: Tester will generate test suite",
-		"Feedback loop: If critical issues found, rebuild affected files (max 3 retries)",
+		"Reviewer policy: review findings are advisory and do not stop the pipeline",
 	}
 	o.LogThoughts(sharedCtx, thoughts)
 	return thoughts, nil
@@ -91,32 +89,22 @@ func (o *OrchestratorAgent) Run(ctx context.Context, sharedCtx *sharedctx.Shared
 	}
 	sharedCtx.Publish(sharedctx.Event{Type: "agent_complete", Agent: string(types.AgentBuilder), Message: fmt.Sprintf("Generated %d files", len(sharedCtx.GetAllFiles()))})
 
-	// Phase 4: Review with retry loop
-	for attempt := 0; attempt < maxReviewRetries; attempt++ {
-		fmt.Printf("🔍 Reviewer: Reviewing code (attempt %d/%d)...\n", attempt+1, maxReviewRetries)
-		sharedCtx.Publish(sharedctx.Event{Type: "agent_start", Agent: string(types.AgentReviewer), Message: fmt.Sprintf("Reviewing code (attempt %d/%d)", attempt+1, maxReviewRetries)})
-		sharedCtx.ClearReviewNotes()
-
-		if err := o.reviewer.Act(ctx, sharedCtx); err != nil {
-			sharedCtx.Publish(sharedctx.Event{Type: "error", Agent: string(types.AgentReviewer), Message: err.Error()})
-			return fmt.Errorf("reviewer failed: %w", err)
-		}
-		sharedCtx.Publish(sharedctx.Event{Type: "agent_complete", Agent: string(types.AgentReviewer), Message: fmt.Sprintf("Review complete: %d notes", len(sharedCtx.GetReviewNotes()))})
-
-		if !sharedCtx.HasCriticalIssues() {
-			break
-		}
-
-		if attempt < maxReviewRetries-1 {
-			fmt.Printf("⚠️  Critical issues found, triggering rebuild (attempt %d)...\n", attempt+1)
-			sharedCtx.Publish(sharedctx.Event{Type: "agent_start", Agent: string(types.AgentBuilder), Message: fmt.Sprintf("Rebuilding after critical review (attempt %d)", attempt+1)})
-			if err := o.builder.Act(ctx, sharedCtx); err != nil {
-				sharedCtx.Publish(sharedctx.Event{Type: "error", Agent: string(types.AgentBuilder), Message: err.Error()})
-				return fmt.Errorf("builder retry %d failed: %w", attempt+1, err)
-			}
-			sharedCtx.Publish(sharedctx.Event{Type: "agent_complete", Agent: string(types.AgentBuilder), Message: "Rebuild complete"})
-		}
+	// Phase 4: Review (advisory-only)
+	fmt.Println("🔍 Reviewer: Reviewing code...")
+	sharedCtx.Publish(sharedctx.Event{Type: "agent_start", Agent: string(types.AgentReviewer), Message: "Reviewing code"})
+	sharedCtx.ClearReviewNotes()
+	if err := o.reviewer.Act(ctx, sharedCtx); err != nil {
+		sharedCtx.Publish(sharedctx.Event{Type: "error", Agent: string(types.AgentReviewer), Message: err.Error()})
+		return fmt.Errorf("reviewer failed: %w", err)
 	}
+
+	reviewNotes := sharedCtx.GetReviewNotes()
+	reviewMessage := fmt.Sprintf("Review complete: %d notes (advisory only)", len(reviewNotes))
+	if sharedCtx.HasCriticalIssues() {
+		reviewMessage = fmt.Sprintf("Review complete: %d notes, including critical findings (continuing)", len(reviewNotes))
+		fmt.Println("⚠️  Reviewer found critical notes, but review is advisory-only; continuing pipeline...")
+	}
+	sharedCtx.Publish(sharedctx.Event{Type: "agent_complete", Agent: string(types.AgentReviewer), Message: reviewMessage})
 
 	// Phase 5: Testing
 	fmt.Println("🧪 Tester: Generating test suite...")
